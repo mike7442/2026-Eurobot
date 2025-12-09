@@ -4,7 +4,7 @@ String inputString = "";
 bool stringComplete = false;
 
 // Коэффициент преобразования мм в шаги (настройте под вашу механику)
-const float MM_TO_STEPS = 32.5;  // 1 мм = 160 шагов (пример)
+const float MM_TO_STEPS = 40.27;  // 1 мм = 160 шагов (пример)
 
 #include <GyverStepper.h>
 GStepper<STEPPER2WIRE> stepper_left(800, 14, 27);
