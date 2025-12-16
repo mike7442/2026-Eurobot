@@ -7,19 +7,20 @@ bool stringComplete = false;
 const float MM_TO_STEPS = 40.27;  // 1 мм = 160 шагов (пример)
 
 #include <GyverStepper.h>
-GStepper<STEPPER2WIRE> stepper_left(800, 14, 27);
-GStepper<STEPPER2WIRE> stepper_right(800, 13, 12);
+GStepper<STEPPER2WIRE> stepper_left(800, 17, 16);
+GStepper<STEPPER2WIRE> stepper_right(800, 18, 5);
 // GStepper<STEPPER2WIRE> stepper_left(800, 12, 11);
 // GStepper<STEPPER2WIRE> stepper_right(800, 9, 10);
 
-
+#define PIN_MOTOR_ENABLE_0 15
+#define PIN_MOTOR_ENABLE_1 4
 
 void setup() {
   Serial.begin(115200);
 
   // enable
-  pinMode(4, OUTPUT);
-  digitalWrite(4, 0);
+  pinMode(PIN_MOTOR_ENABLE_1, OUTPUT);
+  digitalWrite(PIN_MOTOR_ENABLE_1, 0);
 
   stepper_right.setRunMode(KEEP_SPEED);
   stepper_right.setRunMode(FOLLOW_POS);
@@ -31,8 +32,8 @@ void setup() {
   stepper_left.setMaxSpeed(2000);
   stepper_left.setAcceleration(2400);
 
-  pinMode(26, OUTPUT);
-  digitalWrite(26, 1);
+  pinMode(PIN_MOTOR_ENABLE_0, OUTPUT);
+  digitalWrite(PIN_MOTOR_ENABLE_0, 0);
 }
 void setMotorPosition(int motorSelector, float position_mm) {
   // Логирование входных параметров
@@ -49,38 +50,38 @@ void setMotorPosition(int motorSelector, float position_mm) {
     case 1:  // Только левый мотор
       if (position_mm == 0.0f) {
         Serial.println("  -> Disabling LEFT motor");
-        digitalWrite(26, 1);  // Обесточиваем (пин 26)
+        digitalWrite(PIN_MOTOR_ENABLE_0, 1);  // Обесточиваем (пин 26)
       } else {
         Serial.print("  -> Moving LEFT motor to ");
         Serial.print(steps);
         Serial.println(" steps");
         stepper_left.setTarget(steps);
-        digitalWrite(26, 0);  // Включаем (пин 26)
+        digitalWrite(PIN_MOTOR_ENABLE_0, 0);  // Включаем (пин 26)
       }
       break;
     case 2:  // Только правый мотор
       if (position_mm == 0.0f) {
         Serial.println("  -> Disabling RIGHT motor");
-        digitalWrite(26, 1);  // Обесточиваем (пин 26)
+        digitalWrite(PIN_MOTOR_ENABLE_0, 1);  // Обесточиваем (пин 26)
       } else {
         Serial.print("  -> Moving RIGHT motor to ");
         Serial.print(steps);
         Serial.println(" steps");
         stepper_right.setTarget(steps);
-        digitalWrite(26, 0);  // Включаем (пин 26)
+        digitalWrite(PIN_MOTOR_ENABLE_0, 0);  // Включаем (пин 26)
       }
       break;
     case 3:  // Оба мотора
       if (position_mm == 0.0f) {
         Serial.println("  -> Disabling BOTH motors");
-        digitalWrite(26, 1);  // Обесточиваем оба (пин 26)
+        digitalWrite(PIN_MOTOR_ENABLE_0, 1);  // Обесточиваем оба (пин 26)
       } else {
         Serial.print("  -> Moving BOTH motors to ");
         Serial.print(steps);
         Serial.println(" steps");
         stepper_left.setTarget(steps);
         stepper_right.setTarget(steps);
-        digitalWrite(26, 0);  // Включаем (пин 26)
+        digitalWrite(PIN_MOTOR_ENABLE_0, 0);  // Включаем (пин 26)
       }
       break;
     default:
@@ -133,7 +134,7 @@ void processSerialCommand() {
   }
 }
 void loop() {
-  processSerialCommand(); // Обработка Serial команд
+  processSerialCommand();  // Обработка Serial команд
   bool stepper_left_is_moving = stepper_left.tick();
   bool stepper_right_is_moving = stepper_right.tick();
   if (!stepper_right_is_moving and !stepper_left_is_moving) {
