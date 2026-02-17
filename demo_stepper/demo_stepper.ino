@@ -3,9 +3,10 @@
 GStepper<STEPPER2WIRE> stepper(2048, 16, 17);
 
 void setup() {
-  Serial.begin(115200);
   pinMode(ENA, OUTPUT);
   stepper.setRunMode(FOLLOW_POS);
+  stepper.setAcceleration(600);
+  stepper.setMaxSpeed(2000);
   digitalWrite(ENA, 0);
 }
 
