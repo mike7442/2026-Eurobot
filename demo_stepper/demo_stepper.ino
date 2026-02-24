@@ -1,6 +1,6 @@
 #include <GyverStepper.h>
 #define ENA 5
-GStepper<STEPPER2WIRE> stepper(2048, 16, 17);
+GStepper<STEPPER2WIRE> stepper(800, 16, 17);
 
 void setup() {
   pinMode(ENA, OUTPUT);
