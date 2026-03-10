@@ -8,3 +8,8 @@ SYNTAX:
 ```
 (Servo number) arm,finger down_pos,up pos
 ```
+K_LIFT:
+```
+L_LIFT_MM_PER_REV 16.07
+R_LIFT_MM_PER_REV 16.05
+```
