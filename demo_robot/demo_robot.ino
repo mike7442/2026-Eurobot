@@ -147,46 +147,6 @@ void setup() {
 // Заголовок пакета
 static const uint8_t LIDAR_HEADER[] = { 0x55, 0xAA, 0x03, 0x08 };
 
-// Функция ожидания заголовка
-bool waitForHeader(HardwareSerial& ser) {
-  uint8_t matchPos = 0;
-  uint32_t start = millis();
-  while (true) {
-    if (ser.available()) {
-      uint8_t b = ser.read();
-      if (b == LIDAR_HEADER[matchPos]) {
-        matchPos++;
-        if (matchPos == 4) return true;
-      } else {
-        matchPos = 0;
-      }
-    }
-    if (millis() - start > 100) return false;
-  }
-}
-
-// Функция чтения байтов с таймаутом
-bool readBytesWithTimeout(HardwareSerial& ser, uint8_t* buffer, size_t length, uint32_t timeout_ms = 500) {
-  uint32_t start = millis();
-  size_t count = 0;
-  while (count < length) {
-    if (ser.available()) {
-      buffer[count++] = ser.read();
-    }
-    if (millis() - start > timeout_ms) {
-      return false;
-    }
-  }
-  return true;
-}
-
-// Функция декодирования угла
-float decodeAngle(uint16_t rawAngle) {
-  float angleDeg = (float)(rawAngle - 0xA000) / 64.0f;
-  while (angleDeg < 0) angleDeg += 360.0f;
-  while (angleDeg >= 360) angleDeg -= 360.0f;
-  return angleDeg;
-}
 void loop() {
   l_wheel.tick();
   r_wheel.tick();
@@ -195,7 +155,6 @@ void loop() {
   servoPosControl();
   handleUARTCommand();
   updateOdometry();
-  parseAndPrintLidarPoints();
 }
 
 float mapServoValue(int servoNum, float input) {
