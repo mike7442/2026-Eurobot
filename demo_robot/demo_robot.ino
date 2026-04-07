@@ -26,6 +26,9 @@ const float SPEED_M_S_TO_STEPS_S = STEPS_PER_REVOLUTION / (PI * WHEEL_DIAMETER_M
 
 // Пины сервоприводов (RR, RL, LR, LL)
 const int servoPins[] = { 32, 33, 15, 17 };
+// Минимальные и максимальные углы для каждого сервопривода
+int servoMinAngles[4] = { 5, 14, 169, 168 };  // RR, RL, LR, LL
+int servoMaxAngles[4] = { 95, 104, 79, 78 };  // RR, RL, LR, LL
 
 // === ОБЪЕКТЫ ===
 GStepper<STEPPER2WIRE> l_wheel(800, L_WHEEL_STP, L_WHEEL_DIR);
@@ -98,6 +101,16 @@ void loop() {
   handleUARTCommand();
 }
 
+float mapServoValue(int servoNum, float input) {
+  input = constrain(input, 0.0, 1.0);  // Ограничиваем от 0 до 1
+
+  int minAngle = servoMinAngles[servoNum];
+  int maxAngle = servoMaxAngles[servoNum];
+
+  // Мапим от 0..1 в minAngle..maxAngle
+  return minAngle + input * (maxAngle - minAngle);
+}
+
 void setWheelSpeed(int side, float speed_m_s) {
   float speed_steps_s = speed_m_s * SPEED_M_S_TO_STEPS_S;
   int reverce = -1 + 2 * side;
@@ -136,19 +149,20 @@ void setRobotMotion(float linear, float angular) {
   r_wheel.setSpeed(v_right * SPEED_M_S_TO_STEPS_S);
 }
 
-void setServoAngle(int servoNum, int angle) {
+void setServoAngle(int servoNum, float value) {
   if (servoNum >= 0 && servoNum < 4) {
-    if (angle == -1) {  // Команда на отключение
+    if (value < 0) {  // Команда на отключение (-1)
       if (servo_attached[servoNum]) {
         servos[servoNum].detach();
         servo_attached[servoNum] = false;
         Serial.printf("Servo %d detached\n", servoNum);
       }
-    } else if (angle >= 0 && angle <= 180) {  // Команда на угол
+    } else if (value >= 0 && value <= 1.0) {  // Команда: 0.0 .. 1.0
       if (!servo_attached[servoNum]) {
         servos[servoNum].attach(servoPins[servoNum], 500, 2500);
         servo_attached[servoNum] = true;
       }
+      int angle = (int)mapServoValue(servoNum, value);
       servosTargetPos[servoNum] = angle;
     }
   }
