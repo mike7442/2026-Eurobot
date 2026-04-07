@@ -21,6 +21,7 @@ const float STEPS_PER_REVOLUTION = 800.0;
 const float MM_TO_M = 0.001;
 const float WHEEL_BASE_M = 0.207;  // Пример: 30 см между колёсами
 
+
 // Коэффициент для перевода м/с в шаги/сек
 const float SPEED_M_S_TO_STEPS_S = STEPS_PER_REVOLUTION / (PI * WHEEL_DIAMETER_MM * MM_TO_M);
 
@@ -46,7 +47,55 @@ int servosCurrentPos[4] = { 90, 90, 90, 90 };
 uint32_t servosTimer[4] = { 0, 0, 0, 0 };
 int sDelay = 10;
 int servosDelay[4] = { sDelay, sDelay, sDelay, sDelay };
+// === ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ===
 
+float prev_l_steps = 0;
+float prev_r_steps = 0;
+
+// Позиция робота
+float robot_x = 0, robot_y = 0, robot_theta = 0;
+
+unsigned long lastOdometryUpdate = 0;
+const unsigned long odometryInterval = 100;  // 100 мс
+
+void updateOdometry() {
+  if (millis() - lastOdometryUpdate < odometryInterval) {
+    return;  // Ждём следующий интервал
+  }
+
+  float curr_l_steps = l_wheel.getCurrent();
+  float curr_r_steps = r_wheel.getCurrent();
+
+  float delta_l_steps = curr_l_steps - prev_l_steps;
+  float delta_r_steps = curr_r_steps - prev_r_steps;
+
+  // Переводим шаги в метры
+  float step_to_meter = (PI * WHEEL_DIAMETER_MM * MM_TO_M) / STEPS_PER_REVOLUTION;
+
+  float dl = delta_l_steps * step_to_meter;
+  float dr = delta_r_steps * step_to_meter;
+
+  // Обновляем предыдущие значения
+  prev_l_steps = curr_l_steps;
+  prev_r_steps = curr_r_steps;
+
+  // Кинематика дифференциального привода
+  float ds = (dl + dr) / 2.0;
+  float dtheta = (dr - dl) / WHEEL_BASE_M;
+
+  // Обновляем угол
+  robot_theta += dtheta;
+
+  // Обновляем позицию
+  robot_x += ds * cos(robot_theta);
+  robot_y += ds * sin(robot_theta);
+
+  // Выводим в Serial Monitor
+  Serial.printf("Odometry -> X: %.3f m, Y: %.3f m, Theta: %.3f rad\n", robot_x, robot_y, robot_theta);
+
+  // Обновляем время
+  lastOdometryUpdate = millis();
+}
 void setup() {
   Serial.begin(115200);
 
@@ -66,18 +115,22 @@ void setup() {
   l_wheel.setRunMode(KEEP_SPEED);
   l_wheel.setAcceleration(600);
   l_wheel.setMaxSpeed(2000);
+  l_wheel.reverse(0);
 
   r_wheel.setRunMode(KEEP_SPEED);
   r_wheel.setAcceleration(600);
   r_wheel.setMaxSpeed(2000);
+  r_wheel.reverse(1);
 
   l_lift.setRunMode(FOLLOW_POS);
   l_lift.setAcceleration(600);
   l_lift.setMaxSpeed(2000);
+  l_lift.reverse(0);
 
   r_lift.setRunMode(FOLLOW_POS);
   r_lift.setAcceleration(600);
   r_lift.setMaxSpeed(2000);
+  r_lift.reverse(0);
 
   // Настройка серв
   ESP32PWM::allocateTimer(0);
@@ -91,7 +144,49 @@ void setup() {
     servos[i].write(servosCurrentPos[i]);
   }
 }
+// Заголовок пакета
+static const uint8_t LIDAR_HEADER[] = { 0x55, 0xAA, 0x03, 0x08 };
 
+// Функция ожидания заголовка
+bool waitForHeader(HardwareSerial& ser) {
+  uint8_t matchPos = 0;
+  uint32_t start = millis();
+  while (true) {
+    if (ser.available()) {
+      uint8_t b = ser.read();
+      if (b == LIDAR_HEADER[matchPos]) {
+        matchPos++;
+        if (matchPos == 4) return true;
+      } else {
+        matchPos = 0;
+      }
+    }
+    if (millis() - start > 100) return false;
+  }
+}
+
+// Функция чтения байтов с таймаутом
+bool readBytesWithTimeout(HardwareSerial& ser, uint8_t* buffer, size_t length, uint32_t timeout_ms = 500) {
+  uint32_t start = millis();
+  size_t count = 0;
+  while (count < length) {
+    if (ser.available()) {
+      buffer[count++] = ser.read();
+    }
+    if (millis() - start > timeout_ms) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Функция декодирования угла
+float decodeAngle(uint16_t rawAngle) {
+  float angleDeg = (float)(rawAngle - 0xA000) / 64.0f;
+  while (angleDeg < 0) angleDeg += 360.0f;
+  while (angleDeg >= 360) angleDeg -= 360.0f;
+  return angleDeg;
+}
 void loop() {
   l_wheel.tick();
   r_wheel.tick();
@@ -99,6 +194,8 @@ void loop() {
   r_lift.tick();
   servoPosControl();
   handleUARTCommand();
+  updateOdometry();
+  parseAndPrintLidarPoints();
 }
 
 float mapServoValue(int servoNum, float input) {
@@ -113,7 +210,6 @@ float mapServoValue(int servoNum, float input) {
 
 void setWheelSpeed(int side, float speed_m_s) {
   float speed_steps_s = speed_m_s * SPEED_M_S_TO_STEPS_S;
-  int reverce = -1 + 2 * side;
   auto& motor = (side == 0) ? l_wheel : r_wheel;
   motor.setSpeed(speed_steps_s);
 }
@@ -129,23 +225,23 @@ void setLiftPosition(int side, float mm) {
     Serial.println(side == 2 ? "Left lift disabled" : "Right lift disabled");
   } else {
     if (!powered) {
-      digitalWrite(ena_pin, LOW); // Включить питание
+      digitalWrite(ena_pin, LOW);  // Включить питание
       powered = true;
     }
-    float stepsPerMM = 800 / 16.07; // Пример: 16.07 mm/rev
-    if (side == 3) stepsPerMM = 800 / 16.05; // Для правого подъёмника
+    float stepsPerMM = 800 / 16.07;           // Пример: 16.07 mm/rev
+    if (side == 3) stepsPerMM = 800 / 16.05;  // Для правого подъёмника
     mm = constrain(mm, 0.0, 200.0);
     long targetSteps = mm * stepsPerMM;
-    motor.setTarget(-targetSteps);
+    motor.setTarget(targetSteps);
     Serial.printf("%s moving to: %.1f mm\n", (side == 2 ? "Left lift" : "Right lift"), mm);
   }
 }
 
 void setRobotMotion(float linear, float angular) {
-  float v_left  = linear - (angular * WHEEL_BASE_M / 2.0);
+  float v_left = linear - (angular * WHEEL_BASE_M / 2.0);
   float v_right = linear + (angular * WHEEL_BASE_M / 2.0);
 
-  l_wheel.setSpeed(-v_left * SPEED_M_S_TO_STEPS_S);
+  l_wheel.setSpeed(v_left * SPEED_M_S_TO_STEPS_S);
   r_wheel.setSpeed(v_right * SPEED_M_S_TO_STEPS_S);
 }
 
@@ -205,10 +301,10 @@ void handleUARTCommand() {
     float value = rest.toFloat();
 
     switch (target) {
-      case 0: setWheelSpeed(0, value); break;   // Левое колесо
-      case 1: setWheelSpeed(1, value); break;   // Правое колесо
-      case 2: setLiftPosition(2, value); break; // Левый подъёмник
-      case 3: setLiftPosition(3, value); break; // Правый подъёмник
+      case 0: setWheelSpeed(0, value); break;    // Левое колесо
+      case 1: setWheelSpeed(1, value); break;    // Правое колесо
+      case 2: setLiftPosition(2, value); break;  // Левый подъёмник
+      case 3: setLiftPosition(3, value); break;  // Правый подъёмник
       case 4 ... 7: setServoAngle(target - 4, (int)value); break;
       // case 9: больше не нужен
       default: Serial.println("Invalid target");
