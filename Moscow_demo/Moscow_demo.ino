@@ -38,6 +38,8 @@ GStepper<STEPPER2WIRE> leftStepper(800, 19, 18);
 
 // Состояния движения
 bool movementStarted = false;
+bool waitingAfterStart = false;
+uint32_t waitStartTime = 0;
 int movePhase = 0;                 // 0 = вперёд, 1 = назад
 long targetSteps = 1000;           // Сколько шагов проехать вперёд
 long initialPosRight = 0;
@@ -260,27 +262,40 @@ void setup() {
   leftStepper.setRunMode(FOLLOW_POS);
   leftStepper.setAcceleration(600);
   leftStepper.setMaxSpeed(2000);
+  leftStepper.reverse(1);
   digitalWrite(ENA_LEFT, 0);
 
   // Инициализация Serial для лидара
   Serial.begin(BAUDRATE);
   Serial1.begin(BAUDRATE, SERIAL_8N1, LIDAR_RX_PIN, LIDAR_TX_PIN);
 
-  Serial.println("Robot ready. Release button on pin 2 to start.");
+  Serial.println("Robot ready. Release button on pin 2 to start. Waiting 5 seconds before moving.");
 }
 
 void loop() {
   // Проверяем, была ли отпущена кнопка
   if (!movementStarted && digitalRead(2) == HIGH) {
     movementStarted = true;
-    initialPosRight = rightStepper.getCurrent();
-    initialPosLeft = leftStepper.getCurrent();
-    rightStepper.setTarget(initialPosRight + targetSteps);
-    leftStepper.setTarget(initialPosLeft + targetSteps);
+    waitingAfterStart = true;
+    waitStartTime = millis();
+  }
+
+  // Если идёт ожидание после отпускания кнопки
+  if (waitingAfterStart) {
+    if (millis() - waitStartTime >= 5000) { // 5 секунд
+      waitingAfterStart = false;
+      initialPosRight = rightStepper.getCurrent();  // Используем getCurrent()
+      initialPosLeft = leftStepper.getCurrent();
+      rightStepper.setTarget(initialPosRight + targetSteps);
+      leftStepper.setTarget(initialPosLeft + targetSteps);
+    }
+    // Продолжаем парсить лидар, но не смотрим на опасность
+    parseAndProcessPacket();
+    return;
   }
 
   // Если движение началось
-  if (movementStarted) {
+  if (movementStarted && !waitingAfterStart) {
     // Проверяем, не опасно ли двигаться
     if (lidarDanger) {
       // Останавливаем моторы
@@ -293,14 +308,14 @@ void loop() {
     }
 
     // Проверяем, закончилась ли первая фаза (вперёд)
-    if (movePhase == 0 && abs(rightStepper.getCurrent() - initialPosRight) >= targetSteps) {
+    if (movePhase == 0 && abs(rightStepper.getCurrent() - initialPosRight) >= targetSteps) { // getCurrent()
       movePhase = 1;
       rightStepper.setTarget(initialPosRight + 10); // назад 990
       leftStepper.setTarget(initialPosLeft + 10);
     }
 
     // Проверяем, закончилась ли вторая фаза (назад)
-    if (movePhase == 1 && abs(rightStepper.getCurrent() - (initialPosRight + 10)) >= 990) {
+    if (movePhase == 1 && abs(rightStepper.getCurrent() - (initialPosRight + 10)) >= 990) { // getCurrent()
       // Завершаем движение
       movementStarted = false;
       movePhase = 0;
