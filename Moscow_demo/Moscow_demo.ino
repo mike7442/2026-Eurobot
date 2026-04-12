@@ -9,6 +9,9 @@
 #define ENA_RIGHT 5
 #define ENA_LEFT  4
 
+// Таймаут смерти робота (20 секунд)
+#define ROBOT_LIFETIME_MS 24000
+
 /********************************************************
  *  ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ
  ********************************************************/
@@ -21,6 +24,8 @@ GStepper<STEPPER2WIRE> leftStepper(800, 19, 18);
 bool movementStarted = false;
 bool waitingAfterStart = false;
 uint32_t waitStartTime = 0;
+uint32_t robotStartTime = 0;       // Время, когда кнопка была отпущена
+bool robotIsDead = false;          // Флаг смерти робота
 int movePhase = 0;                 // 0 = вперёд, 1 = назад
 
 // Состояние от лидара
@@ -262,20 +267,35 @@ void setup() {
 }
 
 void loop() {
+  // Если робот "умер", он больше не делает ничего
+  if (robotIsDead) {
+    return;
+  }
+
   // Проверяем, была ли отпущена кнопка
   if (!movementStarted && !digitalRead(2)) { // Инвертируем кнопку: если LOW (нажата), то не запускаем
     movementStarted = true;
+    robotStartTime = millis(); // Фиксируем время начала
     waitingAfterStart = true;
     waitStartTime = millis();
     Serial.println("Button released. Waiting 5 seconds before moving...");
+  }
+
+  // Проверяем, прошло ли 20 секунд с момента отпускания кнопки
+  if (movementStarted && (millis() - robotStartTime >= ROBOT_LIFETIME_MS)) {
+    Serial.println("Robot died due to timeout!");
+    digitalWrite(ENA_RIGHT, HIGH); // Выключаем моторы
+    digitalWrite(ENA_LEFT, HIGH);
+    robotIsDead = true;
+    return;
   }
 
   // Если идёт ожидание после отпускания кнопки
   if (waitingAfterStart) {
     if (millis() - waitStartTime >= 5000) { // 5 секунд
       waitingAfterStart = false;
-      rightStepper.setTarget(4000);  // Вперёд
-      leftStepper.setTarget(4000);
+      rightStepper.setTarget(7000);  // Вперёд
+      leftStepper.setTarget(7000);
       Serial.println("Moving forward...");
     }
     // Продолжаем парсить лидар, но не смотрим на опасность
@@ -303,16 +323,16 @@ void loop() {
     }
 
     // Проверяем, закончилась ли первая фаза (вперёд)
-    if (movePhase == 0 && rightStepper.getCurrent() >= 4000) { // Вперёд
+    if (movePhase == 0 && rightStepper.getCurrent() >= 1200) { // Вперёд
       movePhase = 1;
       phase0Complete = true;
       Serial.println("Phase 0 complete. Moving back...");
-      rightStepper.setTarget(0); // Назад
-      leftStepper.setTarget(0);
+      rightStepper.setTarget(-300); // Назад
+      leftStepper.setTarget(-300);
     }
 
     // Проверяем, закончилась ли вторая фаза (назад)
-    if (movePhase == 1 && rightStepper.getCurrent() <= 0) { // Назад
+    if (movePhase == 1 && rightStepper.getCurrent() <= -300) { // Назад
       phase1Complete = true;
       Serial.println("Phase 1 complete. Movement finished.");
       movementStarted = false;
