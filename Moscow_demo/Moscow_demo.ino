@@ -5,25 +5,6 @@
  *  КОНСТАНТЫ И ПАРАМЕТРЫ
  ********************************************************/
 
-// Определение количества «секторов» (равномерно делим 360° на 12 частей).
-#define NUM_SECTORS 12
-
-// Параметры UART для лидара (ESP32-специфичный Serial1)
-#define LIDAR_RX_PIN 16  // Изменили на 16
-#define LIDAR_TX_PIN 17  // Изменили на 17
-#define BAUDRATE 115200
-
-// Структура пакета лидара: 4 байта заголовка, затем 32 байта данных
-static const uint8_t LIDAR_HEADER[] = { 0x55, 0xAA, 0x03, 0x08 };
-static const uint8_t LIDAR_HEADER_LEN = 4;
-static const uint8_t LIDAR_BODY_LEN = 32;
-
-// Пороговые расстояния (в миллиметрах) и время залипания аварии
-#define ALARM_DIST 400     // Менее 400 мм -> сектор в красном цвете
-#define WARNING_DIST 650   // Менее 650 мм (но >= 400 мм) -> жёлтый
-#define ALARM_HOLD_MS 300  // Время (мс), которое сектор будет «залипать» в красном
-#define SECTOR_OFFSET 1    // Cдвиг секторов (0..11)
-
 // Пины двигателей
 #define ENA_RIGHT 5
 #define ENA_LEFT  4
@@ -41,27 +22,14 @@ bool movementStarted = false;
 bool waitingAfterStart = false;
 uint32_t waitStartTime = 0;
 int movePhase = 0;                 // 0 = вперёд, 1 = назад
-long targetSteps = 1000;           // Сколько шагов проехать вперёд
-long initialPosRight = 0;
-long initialPosLeft = 0;
 
 // Состояние от лидара
 bool lidarDanger = false;
+bool dangerLogged = false;         // Чтобы логировать "DANGER" только один раз
 
-/********************************************************
- *  ГЛОБАЛЬНЫЕ МАССИВЫ
- ********************************************************/
-// Храним текущее измеренное расстояние по каждому из 12 секторов.
-static float sectorDistances[NUM_SECTORS] = { 0.0f };
-
-// Время последнего обновления данных сектора (в миллисекундах).
-static uint32_t sectorUpdateTime[NUM_SECTORS] = { 0 };
-
-// Время, до которого сектор должен находиться в состоянии «тревоги» (красный цвет).
-static uint32_t sectorAlarmUntil[NUM_SECTORS] = { 0 };
-
-// Константа, обозначающая «нет данных».
-static const float NO_VALUE = 99999.0f;
+// Для проверки завершения движения
+bool phase0Complete = false;
+bool phase1Complete = false;
 
 /********************************************************
  *  ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -81,6 +49,29 @@ bool readBytesWithTimeout(HardwareSerial &ser, uint8_t *buffer, size_t length, u
   }
   return true;
 }
+
+// Структура пакета лидара: 4 байта заголовка, затем 32 байта данных
+static const uint8_t LIDAR_HEADER[] = { 0x55, 0xAA, 0x03, 0x08 };
+static const uint8_t LIDAR_HEADER_LEN = 4;
+static const uint8_t LIDAR_BODY_LEN = 32;
+
+// Пороговые расстояния (в миллиметрах) и время залипания аварии
+#define ALARM_DIST 400     // Менее 400 мм -> сектор в красном цвете
+#define WARNING_DIST 650   // Менее 650 мм (но >= 400 мм) -> жёлтый
+#define ALARM_HOLD_MS 300  // Время (мс), которое сектор будет «залипать» в красным
+#define SECTOR_OFFSET 1    // Cдвиг секторов (0..11)
+
+// Храним текущее измеренное расстояние по каждому из 12 секторов.
+static float sectorDistances[12] = { 0.0f };
+
+// Время последнего обновления данных сектора (в миллисекундах).
+static uint32_t sectorUpdateTime[12] = { 0 };
+
+// Время, до которого сектор должен находиться в состоянии «тревоги» (красный цвет).
+static uint32_t sectorAlarmUntil[12] = { 0 };
+
+// Константа, обозначающая «нет данных».
+static const float NO_VALUE = 99999.0f;
 
 bool waitForHeader(HardwareSerial &ser) {
   uint8_t matchPos = 0;
@@ -123,14 +114,10 @@ int angleToSector(float angleDeg) {
   while (shifted >= 360) shifted -= 360.0f;
 
   // Делим на 30°, получаем индекс сектора
-  int sector = (int)(shifted / 30.0f) % NUM_SECTORS;
-  sector = (sector + SECTOR_OFFSET) % NUM_SECTORS;
+  int sector = (int)(shifted / 30.0f) % 12;
+  sector = (sector + SECTOR_OFFSET) % 12;
   return sector;
 }
-
-/********************************************************
- *  ОСНОВНАЯ ФУНКЦИЯ ПАРСИНГА И ОБРАБОТКИ ДАННЫХ ЛИДАРА
- ********************************************************/
 
 bool parseAndProcessPacket() {
   // 1) Дожидаемся заголовка лидара
@@ -181,8 +168,8 @@ bool parseAndProcessPacket() {
   }
 
   // 5) Создаём в ременный массив, где соберём минимальные расстояния по секторам
-  float tempSectorMin[NUM_SECTORS];
-  for (int s = 0; s < NUM_SECTORS; s++) {
+  float tempSectorMin[12];
+  for (int s = 0; s < 12; s++) {
     tempSectorMin[s] = NO_VALUE;  // Изначально никаких данных
   }
 
@@ -200,7 +187,7 @@ bool parseAndProcessPacket() {
 
   // 7) Обновляем глобальный массив расстояний и время их обновления
   uint32_t now = millis();
-  for (int s = 0; s < NUM_SECTORS; s++) {
+  for (int s = 0; s < 12; s++) {
     if (tempSectorMin[s] != NO_VALUE) {
       sectorDistances[s] = tempSectorMin[s];
       sectorUpdateTime[s] = now;
@@ -208,7 +195,7 @@ bool parseAndProcessPacket() {
   }
 
   // 8) Если сектор не обновлялся более 500 мс, считаем, что данных по нему нет
-  for (int s = 0; s < NUM_SECTORS; s++) {
+  for (int s = 0; s < 12; s++) {
     if ((now - sectorUpdateTime[s]) > 500) {
       sectorDistances[s] = NO_VALUE;
     }
@@ -216,7 +203,7 @@ bool parseAndProcessPacket() {
 
   // 9) Обработка «залипания» красного: если новое расстояние < ALARM_DIST,
   //    продлеваем время «AlarmUntil».
-  for (int s = 0; s < NUM_SECTORS; s++) {
+  for (int s = 0; s < 12; s++) {
     float dist = sectorDistances[s];
     if (dist != NO_VALUE && dist < ALARM_DIST) {
       sectorAlarmUntil[s] = now + ALARM_HOLD_MS;
@@ -225,7 +212,7 @@ bool parseAndProcessPacket() {
 
   // 10) Проверяем, есть ли хотя бы один сектор в состоянии "тревога"
   int anyDanger = 0; // Нет опасности изначально
-  for (int s = 0; s < NUM_SECTORS; s++) {
+  for (int s = 0; s < 12; s++) {
     float dist = sectorDistances[s];
 
     if (dist != NO_VALUE && dist < ALARM_DIST) {
@@ -254,40 +241,42 @@ void setup() {
   pinMode(ENA_RIGHT, OUTPUT);
   pinMode(ENA_LEFT, OUTPUT);
 
+  // Реверсим левый мотор
+  leftStepper.reverse(1);
+
   rightStepper.setRunMode(FOLLOW_POS);
   rightStepper.setAcceleration(600);
   rightStepper.setMaxSpeed(2000);
-  digitalWrite(ENA_RIGHT, 0);
+  digitalWrite(ENA_RIGHT, LOW); // Включаем моторы
 
   leftStepper.setRunMode(FOLLOW_POS);
   leftStepper.setAcceleration(600);
   leftStepper.setMaxSpeed(2000);
-  leftStepper.reverse(1);
-  digitalWrite(ENA_LEFT, 0);
+  digitalWrite(ENA_LEFT, LOW);
 
   // Инициализация Serial для лидара
-  Serial.begin(BAUDRATE);
-  Serial1.begin(BAUDRATE, SERIAL_8N1, LIDAR_RX_PIN, LIDAR_TX_PIN);
+  Serial.begin(115200);
+  Serial1.begin(115200, SERIAL_8N1, 16, 17);
 
   Serial.println("Robot ready. Release button on pin 2 to start. Waiting 5 seconds before moving.");
 }
 
 void loop() {
   // Проверяем, была ли отпущена кнопка
-  if (!movementStarted && digitalRead(2) == HIGH) {
+  if (!movementStarted && !digitalRead(2)) { // Инвертируем кнопку: если LOW (нажата), то не запускаем
     movementStarted = true;
     waitingAfterStart = true;
     waitStartTime = millis();
+    Serial.println("Button released. Waiting 5 seconds before moving...");
   }
 
   // Если идёт ожидание после отпускания кнопки
   if (waitingAfterStart) {
     if (millis() - waitStartTime >= 5000) { // 5 секунд
       waitingAfterStart = false;
-      initialPosRight = rightStepper.getCurrent();  // Используем getCurrent()
-      initialPosLeft = leftStepper.getCurrent();
-      rightStepper.setTarget(initialPosRight + targetSteps);
-      leftStepper.setTarget(initialPosLeft + targetSteps);
+      rightStepper.setTarget(1000);  // Вперёд
+      leftStepper.setTarget(1000);
+      Serial.println("Moving forward...");
     }
     // Продолжаем парсить лидар, но не смотрим на опасность
     parseAndProcessPacket();
@@ -301,22 +290,31 @@ void loop() {
       // Останавливаем моторы
       rightStepper.setTarget(rightStepper.getCurrent());
       leftStepper.setTarget(leftStepper.getCurrent());
+      if (!dangerLogged) {
+        Serial.println("DANGER: Motors stopped!");
+        dangerLogged = true;
+      }
     } else {
+      // Сбрасываем флаг, если опасность прошла
+      dangerLogged = false;
       // Продолжаем движение
       rightStepper.tick();
       leftStepper.tick();
     }
 
     // Проверяем, закончилась ли первая фаза (вперёд)
-    if (movePhase == 0 && abs(rightStepper.getCurrent() - initialPosRight) >= targetSteps) { // getCurrent()
+    if (movePhase == 0 && rightStepper.getCurrent() >= 1000) { // Вперёд
       movePhase = 1;
-      rightStepper.setTarget(initialPosRight + 10); // назад 990
-      leftStepper.setTarget(initialPosLeft + 10);
+      phase0Complete = true;
+      Serial.println("Phase 0 complete. Moving back...");
+      rightStepper.setTarget(-1000); // Назад
+      leftStepper.setTarget(-1000);
     }
 
     // Проверяем, закончилась ли вторая фаза (назад)
-    if (movePhase == 1 && abs(rightStepper.getCurrent() - (initialPosRight + 10)) >= 990) { // getCurrent()
-      // Завершаем движение
+    if (movePhase == 1 && rightStepper.getCurrent() <= -1000) { // Назад
+      phase1Complete = true;
+      Serial.println("Phase 1 complete. Movement finished.");
       movementStarted = false;
       movePhase = 0;
     }
