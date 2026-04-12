@@ -3,15 +3,15 @@
 #include <WiFiUDP.h>
 
 // Настройки Wi-Fi
-const char* ssid = "YOUR_SSID";
-const char* password = "YOUR_PASSWORD";
+const char* ssid = "realme C61";
+const char* password = "2022y2022y";
 
 // TCP Server
 WiFiServer server_tcp(8888); // TCP сервер на порту 8888
 
 // UDP Client
 WiFiUDP udp_client;
-IPAddress remote_UDP_IP(192, 168, X, Y); // IP-адрес получателя UDP-пакетов (например, твой комп)
+IPAddress remote_UDP_IP(10, 111, 81, 61); // IP-адрес получателя UDP-пакетов (например, твой комп)
 const unsigned int remote_UDP_Port = 12345; // Порт получателя UDP-пакетов
 
 void setup() {
@@ -36,8 +36,13 @@ void setup() {
 
 void loop() {
   // --- Обработка ВХОДЯЩИХ TCP-пакетов ---
-  WiFiClient client_tcp = server_tcp.available(); // Проверяем, есть ли TCP-клиент
-  if (client_tcp) {
+
+  static WiFiClient client_tcp; // Проверяем, есть ли TCP-клиент
+  if ( server_tcp.hasClient() ) {
+    client_tcp = server_tcp.available();
+  }
+
+  if (client_tcp.connected() ) {
     if (client_tcp.connected()) {
       while (client_tcp.available()) {
         String command = client_tcp.readStringUntil('\n'); // Или другой разделитель
