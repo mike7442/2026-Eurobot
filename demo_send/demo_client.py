@@ -1,11 +1,14 @@
+
+
 import socket
 import threading
 import time
-import select # Для неблокирующего чтения TCP
+import select
+import datetime # Для отметок времени
 
 # --- Настройки ---
 # Замените на IP-адрес вашего ESP32 в вашей локальной сети
-ESP32_TCP_IP = "192.168.1.100"  # <-- Укажите реальный IP ESP32
+ESP32_TCP_IP = "10.111.81.194"
 ESP32_TCP_PORT = 8888            # Порт TCP-сервера на ESP32
 UDP_BIND_IP = "0.0.0.0"        # Слушаем на всех интерфейсах
 UDP_BIND_PORT = 12345           # Порт, на котором ESP32 отправляет UDP
@@ -61,7 +64,7 @@ def listen_tcp():
             ready = select.select([tcp_socket], [], [], 0.1) # Таймаут 0.1с
             if ready[0]:
                 data = tcp_socket.recv(1024) # Получаем до 1024 байт
-                if 
+                if len(data) > 0:
                     response = data.decode('utf-8').strip()
                     print(f"[TCP from ESP32]: {response}")
                 else: # Если recv возвращает пустую строку, значит соединение закрыто
@@ -86,17 +89,34 @@ def listen_udp():
     udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     udp_socket.bind((UDP_BIND_IP, UDP_BIND_PORT))
     print(f"Слушаю UDP на {UDP_BIND_IP}:{UDP_BIND_PORT}")
+    print("--- Логирование UDP пакетов начато ---")
 
     try:
         while True:
-            data, addr = udp_socket.recvfrom(1024) # Буфер 1024 байта
-            message = data.decode('utf-8')
-            print(f"[UDP from {addr}]: {message}")
-            # Тут можно обработать полученные телеметрические данные
+            # recvfrom блокирует поток до получения пакета или таймаута
+            # Установим таймаут, чтобы можно было корректно завершить поток
+            udp_socket.settimeout(1.0) 
+            try:
+                data, addr = udp_socket.recvfrom(1024) # Буфер 1024 байта
+                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] # Миллисекунды
+                message_str = data.decode('utf-8', errors='ignore') # Игнорировать ошибки декодирования
+                print(f"[UDP LOG - {timestamp}] Получен пакет от {addr}, размер: {len(data)} байт")
+                print(f"  Содержимое (UTF-8): '{message_str}'")
+                # Печатаем содержимое как hex, если есть подозрение на бинарные данные
+                if any(c < 32 or c > 126 for c in data): # Проверка на непечатные символы
+                     print(f"  Содержимое (HEX): {data.hex()}")
+                print("---") # Разделитель между пакетами
+            except socket.timeout:
+                # Таймаут истёк, продолжаем цикл. Полезно для проверки KeyboardInterrupt.
+                continue 
+
     except KeyboardInterrupt:
-        print("\nОстановка прослушивания UDP.")
+        print("\n[UDP LOG] Остановка прослушивания UDP по запросу.")
+    except Exception as e:
+        print(f"\n[UDP LOG] Непредвиденная ошибка: {e}")
     finally:
         udp_socket.close()
+        print("[UDP LOG] Сокет закрыт.")
 
 if __name__ == "__main__":
     # Подключаемся к ESP32 по TCP
@@ -117,6 +137,7 @@ if __name__ == "__main__":
 
     # Основной поток - обработка ввода пользователя для отправки команд
     print("\nВведите команды ('FORWARD', 'BACKWARD', 'LEFT', 'RIGHT', 'STOP', 'quit'):")
+    print("Лог UDP-пакетов будет отображаться выше.")
     try:
         while True:
             command = input("> ").strip().upper()
@@ -128,7 +149,7 @@ if __name__ == "__main__":
                 print(f"Неизвестная команда: {command}. Используйте FORWARD, BACKWARD, LEFT, RIGHT, STOP, или quit.")
 
     except KeyboardInterrupt:
-        print("\nВыход...")
+        print("\nВыход по Ctrl+C...")
 
     # Закрываем TCP-соединение
     if tcp_socket:
