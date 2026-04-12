@@ -27,7 +27,7 @@ int movePhase = 0;                 // 0 = вперёд, 1 = назад
 bool lidarDanger = false;
 bool dangerLogged = false;         // Чтобы логировать "DANGER" только один раз
 
-// Для проверки завершения движения
+// Параметры движения
 bool phase0Complete = false;
 bool phase1Complete = false;
 
@@ -274,8 +274,8 @@ void loop() {
   if (waitingAfterStart) {
     if (millis() - waitStartTime >= 5000) { // 5 секунд
       waitingAfterStart = false;
-      rightStepper.setTarget(1000);  // Вперёд
-      leftStepper.setTarget(1000);
+      rightStepper.setTarget(4000);  // Вперёд
+      leftStepper.setTarget(4000);
       Serial.println("Moving forward...");
     }
     // Продолжаем парсить лидар, но не смотрим на опасность
@@ -303,16 +303,16 @@ void loop() {
     }
 
     // Проверяем, закончилась ли первая фаза (вперёд)
-    if (movePhase == 0 && rightStepper.getCurrent() >= 1000) { // Вперёд
+    if (movePhase == 0 && rightStepper.getCurrent() >= 4000) { // Вперёд
       movePhase = 1;
       phase0Complete = true;
       Serial.println("Phase 0 complete. Moving back...");
-      rightStepper.setTarget(-1000); // Назад
-      leftStepper.setTarget(-1000);
+      rightStepper.setTarget(0); // Назад
+      leftStepper.setTarget(0);
     }
 
     // Проверяем, закончилась ли вторая фаза (назад)
-    if (movePhase == 1 && rightStepper.getCurrent() <= -1000) { // Назад
+    if (movePhase == 1 && rightStepper.getCurrent() <= 0) { // Назад
       phase1Complete = true;
       Serial.println("Phase 1 complete. Movement finished.");
       movementStarted = false;
