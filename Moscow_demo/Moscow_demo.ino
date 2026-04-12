@@ -56,8 +56,8 @@ static const uint8_t LIDAR_HEADER_LEN = 4;
 static const uint8_t LIDAR_BODY_LEN = 32;
 
 // Пороговые расстояния (в миллиметрах) и время залипания аварии
-#define ALARM_DIST 400     // Менее 400 мм -> сектор в красном цвете
-#define WARNING_DIST 650   // Менее 650 мм (но >= 400 мм) -> жёлтый
+#define ALARM_DIST 200     // Менее 400 мм -> сектор в красном цвете
+#define WARNING_DIST 350   // Менее 650 мм (но >= 400 мм) -> жёлтый
 #define ALARM_HOLD_MS 300  // Время (мс), которое сектор будет «залипать» в красным
 #define SECTOR_OFFSET 1    // Cдвиг секторов (0..11)
 
