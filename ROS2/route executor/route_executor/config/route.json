@@ -1,8 +1,14 @@
 {
-  "route": [
-    { "x": 1.0, "y": 1.0, "theta": 0.0, "action": "pause", "duration": 2 },
-    { "x": 2.0, "y": 2.0, "theta": 1.57, "action": "lift_move", "height": 100 },
-    { "x": 3.0, "y": 1.0, "theta": 3.14, "action": "servos_move", "angles": [90, 90, 110, 110] },
-    { "x": 0.0, "y": 0.0, "theta": 0.0 }
-  ]
+  "blue": {
+    "route": [
+      { "x": 0.0, "y": 0.0, "theta": 0.0, "action": "pause", "duration": 2 },
+      { "x": 0.10, "y": 0.10, "theta": 1.57, "action": "lift_move", "height": 100 }
+    ]
+  },
+  "yellow": {
+    "route": [
+      { "x": 0.0, "y": 0.0, "theta": 0.0, "action": "pause", "duration": 2 },
+      { "x": 0.-10, "y": 0.10, "theta": 1.57, "action": "servos_move", "angles": [90, 90, 110, 110] }
+    ]
+  }
 }
