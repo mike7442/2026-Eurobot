@@ -8,7 +8,7 @@
   "yellow": {
     "route": [
       { "x": 0.0, "y": 0.0, "theta": 0.0, "action": "pause", "duration": 2 },
-      { "x": 0.-10, "y": 0.10, "theta": 1.57, "action": "servos_move", "angles": [90, 90, 110, 110] }
+      { "x": -0.10, "y": 0.10, "theta": 1.57, "action": "servos_move", "angles": [90, 90, 110, 110] }
     ]
   }
 }
