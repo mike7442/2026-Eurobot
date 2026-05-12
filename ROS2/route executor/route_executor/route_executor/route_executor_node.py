@@ -5,6 +5,9 @@ from rclpy.node import Node
 from rclpy.action import ActionClient
 from rclpy.qos import QoSProfile
 from rclpy.duration import Duration # для timeout
+from std_srvs.srv import Trigger  # Импортируем тип сообщения для сервиса
+from action_msgs.msg import GoalStatus # Для проверки статуса цели
+from std_msgs.msg import String # Для подписки на /pwb/side
 
 import json
 from builtin_interfaces.msg import Time
@@ -26,8 +29,15 @@ class RouteExecutor(Node):
         self.lift_pub = self.create_publisher(UInt16, '/pwb/lift_target_height', 10)
         self.servos_pub = self.create_publisher(UInt8MultiArray, '/pwb/servos_target_angles', 10)
 
+        # Подписка на топик /pwb/side
+        self.side_subscriber = self.create_subscription(
+            String, '/pwb/side', self.side_callback, 10
+        )
+        self.current_side = "unknown" # Инициализируем как unknown
+
         self.current_waypoint_index = 0
         self.is_executing_route = False
+        self.route_points = [] # Инициализируем список точек маршрута
 
         # Сервис или топик для запуска выполнения маршрута
         self.start_execution_service = self.create_service(
@@ -37,6 +47,16 @@ class RouteExecutor(Node):
         self.get_logger().info(f'Waiting for NavigateToPose action server...')
         self.nav_client.wait_for_server()
 
+    def side_callback(self, msg):
+        """Обработчик сообщений из топика /pwb/side."""
+        received_side = msg.data.lower() # Приводим к нижнему регистру для сравнения
+        if received_side in ["blue", "yellow"]:
+            self.current_side = received_side
+            self.get_logger().info(f'Updated robot side configuration to: {self.current_side}')
+        else:
+            self.get_logger().warn(f'Received invalid side value: {msg.data}. Expected "blue" or "yellow".')
+
+
     def start_execution_callback(self, request, response):
         if self.is_executing_route:
             self.get_logger().warn('Route execution is already in progress.')
@@ -44,10 +64,26 @@ class RouteExecutor(Node):
             response.message = 'Execution in progress'
             return response
 
+        if self.current_side == "unknown":
+            self.get_logger().error('Robot side configuration is unknown. Cannot start route.')
+            response.success = False
+            response.message = 'Side configuration unknown'
+            return response
+
         try:
             with open(self.route_file_path, 'r') as f:
                 self.route_data = json.load(f)
-            self.route_points = self.route_data.get('route', [])
+            
+            # Выбираем маршрут на основе current_side
+            if self.current_side in self.route_data:
+                 self.route_points = self.route_data[self.current_side].get('route', [])
+                 self.get_logger().info(f'Selected route for side: {self.current_side}')
+            else:
+                 self.get_logger().error(f'No route found in JSON file for side: {self.current_side}')
+                 response.success = False
+                 response.message = f'No route for side: {self.current_side}'
+                 return response
+            
         except FileNotFoundError:
             self.get_logger().error(f'Route file not found: {self.route_file_path}')
             response.success = False
@@ -60,15 +96,15 @@ class RouteExecutor(Node):
             return response
 
         if not self.route_points:
-            self.get_logger().warn('Route file is empty or has no valid points.')
+            self.get_logger().warn('Selected route is empty or has no valid points.')
             response.success = False
-            response.message = 'No points in route'
+            response.message = 'No points in selected route'
             return response
 
         self.current_waypoint_index = 0
         self.is_executing_route = True
         response.success = True
-        response.message = f'Starting execution of {len(self.route_points)} waypoints.'
+        response.message = f'Starting execution of {len(self.route_points)} waypoints for side {self.current_side}.'
 
         self.get_logger().info(f'Started executing route with {len(self.route_points)} points.')
         self.execute_next_waypoint()
@@ -78,6 +114,7 @@ class RouteExecutor(Node):
         if not self.is_executing_route or self.current_waypoint_index >= len(self.route_points):
             self.get_logger().info('Finished executing route or execution stopped.')
             self.is_executing_route = False
+            self.route_points = [] # Очищаем список точек после завершения
             return
 
         waypoint = self.route_points[self.current_waypoint_index]
