@@ -4,17 +4,17 @@ import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
 from rclpy.qos import QoSProfile
-from rclpy.duration import Duration # для timeout
-from std_srvs.srv import Trigger  # Импортируем тип сообщения для сервиса
-from action_msgs.msg import GoalStatus # Для проверки статуса цели
-from std_msgs.msg import String # Для подписки на /pwb/side
+from rclpy.duration import Duration  # для timeout
 
 import json
 from builtin_interfaces.msg import Time
 from geometry_msgs.msg import Point, Pose, PoseStamped, Quaternion
 from nav2_msgs.action import NavigateToPose
 from std_msgs.msg import UInt16, UInt8MultiArray
-import math # для вычисления кватернионов
+from std_srvs.srv import Trigger
+from action_msgs.msg import GoalStatus
+import math  # для вычисления кватернионов
+import time  # для логирования времени
 
 
 class RouteExecutor(Node):
@@ -29,102 +29,70 @@ class RouteExecutor(Node):
         self.lift_pub = self.create_publisher(UInt16, '/pwb/lift_target_height', 10)
         self.servos_pub = self.create_publisher(UInt8MultiArray, '/pwb/servos_target_angles', 10)
 
-        # Подписка на топик /pwb/side
-        self.side_subscriber = self.create_subscription(
-            String, '/pwb/side', self.side_callback, 10
-        )
-        self.current_side = "unknown" # Инициализируем как unknown
-
         self.current_waypoint_index = 0
         self.is_executing_route = False
-        self.route_points = [] # Инициализируем список точек маршрута
 
         # Сервис или топик для запуска выполнения маршрута
         self.start_execution_service = self.create_service(
             Trigger, 'start_route_execution', self.start_execution_callback
         )
-        self.get_logger().info(f'Node initialized. Waiting for route file: {self.route_file_path}')
-        self.get_logger().info(f'Waiting for NavigateToPose action server...')
+        self.get_logger().info(f'[{time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())}] Node initialized. Waiting for route file: {self.route_file_path}')
+        self.get_logger().info(f'[{time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())}] Waiting for NavigateToPose action server...')
         self.nav_client.wait_for_server()
 
-    def side_callback(self, msg):
-        """Обработчик сообщений из топика /pwb/side."""
-        received_side = msg.data.lower() # Приводим к нижнему регистру для сравнения
-        if received_side in ["blue", "yellow"]:
-            self.current_side = received_side
-            self.get_logger().info(f'Updated robot side configuration to: {self.current_side}')
-        else:
-            self.get_logger().warn(f'Received invalid side value: {msg.data}. Expected "blue" or "yellow".')
-
-
     def start_execution_callback(self, request, response):
+        timestamp = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
         if self.is_executing_route:
-            self.get_logger().warn('Route execution is already in progress.')
+            self.get_logger().warn(f'[{timestamp}] Route execution is already in progress.')
             response.success = False
             response.message = 'Execution in progress'
-            return response
-
-        if self.current_side == "unknown":
-            self.get_logger().error('Robot side configuration is unknown. Cannot start route.')
-            response.success = False
-            response.message = 'Side configuration unknown'
             return response
 
         try:
             with open(self.route_file_path, 'r') as f:
                 self.route_data = json.load(f)
-            
-            # Выбираем маршрут на основе current_side
-            if self.current_side in self.route_data:
-                 self.route_points = self.route_data[self.current_side].get('route', [])
-                 self.get_logger().info(f'Selected route for side: {self.current_side}')
-            else:
-                 self.get_logger().error(f'No route found in JSON file for side: {self.current_side}')
-                 response.success = False
-                 response.message = f'No route for side: {self.current_side}'
-                 return response
-            
+            self.route_points = self.route_data.get('route', [])
         except FileNotFoundError:
-            self.get_logger().error(f'Route file not found: {self.route_file_path}')
+            self.get_logger().error(f'[{timestamp}] Route file not found: {self.route_file_path}')
             response.success = False
             response.message = f'File not found: {self.route_file_path}'
             return response
         except json.JSONDecodeError as e:
-            self.get_logger().error(f'Error parsing JSON file: {e}')
+            self.get_logger().error(f'[{timestamp}] Error parsing JSON file: {e}')
             response.success = False
             response.message = f'Invalid JSON: {e}'
             return response
 
         if not self.route_points:
-            self.get_logger().warn('Selected route is empty or has no valid points.')
+            self.get_logger().warn(f'[{timestamp}] Route file is empty or has no valid points.')
             response.success = False
-            response.message = 'No points in selected route'
+            response.message = 'No points in route'
             return response
 
         self.current_waypoint_index = 0
         self.is_executing_route = True
         response.success = True
-        response.message = f'Starting execution of {len(self.route_points)} waypoints for side {self.current_side}.'
+        response.message = f'Starting execution of {len(self.route_points)} waypoints.'
 
-        self.get_logger().info(f'Started executing route with {len(self.route_points)} points.')
+        self.get_logger().info(f'[{timestamp}] Started executing route with {len(self.route_points)} points.')
         self.execute_next_waypoint()
         return response
 
     def execute_next_waypoint(self):
+        timestamp = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
         if not self.is_executing_route or self.current_waypoint_index >= len(self.route_points):
-            self.get_logger().info('Finished executing route or execution stopped.')
+            self.get_logger().info(f'[{timestamp}] Finished executing route or execution stopped.')
             self.is_executing_route = False
-            self.route_points = [] # Очищаем список точек после завершения
             return
 
         waypoint = self.route_points[self.current_waypoint_index]
         x = waypoint.get('x', 0.0)
         y = waypoint.get('y', 0.0)
-        theta = waypoint.get('theta', 0.0) # Угол в радианах
+        theta = waypoint.get('theta', 0.0)  # Угол в радианах
 
         # Создание сообщения цели для Nav2
         goal_msg = NavigateToPose.Goal()
-        goal_msg.pose.header.frame_id = 'map' # Убедись, что это соответствует твоей системе координат
+        goal_msg.pose.header.frame_id = 'map'  # Убедись, что это соответствует твоей системе координат
         goal_msg.pose.header.stamp = self.get_clock().now().to_msg()
 
         goal_msg.pose.pose.position = Point(x=x, y=y, z=0.0)
@@ -135,7 +103,7 @@ class RouteExecutor(Node):
         cosy_cosp = math.cos(theta / 2.0)
         goal_msg.pose.pose.orientation = Quaternion(x=0.0, y=0.0, z=siny_cosp, w=cosy_cosp)
 
-        self.get_logger().info(f'Sending goal to Nav2: ({x}, {y}, theta={theta}) for waypoint {self.current_waypoint_index}')
+        self.get_logger().info(f'[{timestamp}] Sending goal to Nav2: ({x}, {y}, theta={theta}) for waypoint {self.current_waypoint_index}')
 
         # Отправка цели Nav2
         self._send_goal_future = self.nav_client.send_goal_async(goal_msg)
@@ -145,72 +113,90 @@ class RouteExecutor(Node):
 
 
     def goal_response_callback(self, future):
-        goal_handle = future.result()
-        if not goal_handle.accepted:
-            self.get_logger().info('Goal was rejected by server')
-            self.is_executing_route = False # Остановить выполнение при ошибке
-            return
+        timestamp = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
+        try:
+            goal_handle = future.result()
+            if not goal_handle.accepted:
+                self.get_logger().error(f'[{timestamp}] Goal was rejected by server')
+                self.is_executing_route = False  # Остановить выполнение при ошибке
+                return
 
-        self.get_logger().info('Goal accepted by server, waiting for result')
-        self._get_result_future = goal_handle.get_result_async()
-        self._get_result_future.add_done_callback(self.get_result_callback)
+            self.get_logger().info(f'[{timestamp}] Goal accepted by server, waiting for result')
+            self._get_result_future = goal_handle.get_result_async()
+            self._get_result_future.add_done_callback(self.get_result_callback)
+        except Exception as e:
+            self.get_logger().error(f'[{timestamp}] Exception in goal_response_callback: {e}')
+            self.is_executing_route = False
 
     def get_result_callback(self, future):
-        result = future.result().result
-        status = future.result().status
-        if status == GoalStatus.STATUS_SUCCEEDED:
-            self.get_logger().info('Successfully reached waypoint!')
+        timestamp = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
+        try:
+            result = future.result().result
+            status = future.result().status
+            if status == GoalStatus.STATUS_SUCCEEDED:
+                self.get_logger().info(f'[{timestamp}] Successfully reached waypoint {self.current_waypoint_index}!')
 
-            # Выполнение действия (если есть)
-            waypoint = self.route_points[self.current_waypoint_index]
-            action = waypoint.get('action', None)
-            if action:
-                self.execute_action(action, waypoint)
-
-            # Перейти к следующей точке
-            self.current_waypoint_index += 1
-            self.execute_next_waypoint() # Рекурсивный вызов для следующей точки
-        else:
-            self.get_logger().info(f'Failed to reach waypoint. Status code: {status}')
-            # Здесь можно добавить логику повтора или остановки
+                # Выполнение действия (если есть)
+                waypoint = self.route_points[self.current_waypoint_index]
+                action = waypoint.get('action', None)
+                if action:
+                    self.execute_action(action, waypoint)
+                else:
+                    # Если нет действия, сразу перейти к следующей точке
+                    self.current_waypoint_index += 1
+                    self.execute_next_waypoint()
+            else:
+                self.get_logger().error(f'[{timestamp}] Failed to reach waypoint {self.current_waypoint_index}. Status code: {status}')
+                # Здесь можно добавить логику повтора или остановки
+                self.is_executing_route = False
+        except Exception as e:
+            self.get_logger().error(f'[{timestamp}] Exception in get_result_callback: {e}')
             self.is_executing_route = False
 
 
     def execute_action(self, action_type, waypoint_data):
         """Выполняет специфичное действие в точке маршрута."""
-        self.get_logger().info(f'Executing action: {action_type}')
+        timestamp = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
+        self.get_logger().info(f'[{timestamp}] Executing action: {action_type}')
 
         if action_type == "pause":
             duration_sec = waypoint_data.get('duration', 0)
-            self.get_logger().info(f'Pausing for {duration_sec} seconds...')
-            # Простая пауза (блокирует поток выполнения цели, что может быть не идеально)
-            # Лучше использовать таймер, но для простоты пока так.
-            self.timer = self.create_timer(duration_sec, lambda: self.continue_after_pause())
-            self.timer.cancel() # Отменить сразу, запустить таймер заново
-            self.timer.reset()
+            self.get_logger().info(f'[{timestamp}] Pausing for {duration_sec} seconds...')
+            # Используем таймер для неблокирующей паузы
+            self.timer = self.create_timer(duration_sec, self.continue_after_pause)
 
         elif action_type == "lift_move":
             target_height = waypoint_data.get('height', 0)
             msg = UInt16()
             msg.data = target_height
             self.lift_pub.publish(msg)
-            self.get_logger().info(f'Sent lift height command: {target_height}')
+            self.get_logger().info(f'[{timestamp}] Sent lift height command: {target_height}')
+            # После выполнения действия перейти к следующей точке
+            self.current_waypoint_index += 1
+            self.execute_next_waypoint()
 
         elif action_type == "servos_move":
-            angles_list = waypoint_data.get('angles', [0, 0, 0, 0]) # 4 сервопривода
+            angles_list = waypoint_data.get('angles', [0, 0, 0, 0])  # 4 сервопривода
             if len(angles_list) != 4:
-                 self.get_logger().warn(f'Expected 4 servo angles, got {len(angles_list)}. Using default [0,0,0,0]')
-                 angles_list = [0, 0, 0, 0]
+                self.get_logger().warn(f'[{timestamp}] Expected 4 servo angles, got {len(angles_list)}. Using default [0,0,0,0]')
+                angles_list = [0, 0, 0, 0]
             msg = UInt8MultiArray()
             msg.data = angles_list
             self.servos_pub.publish(msg)
-            self.get_logger().info(f'Sent servos angles command: {angles_list}')
+            self.get_logger().info(f'[{timestamp}] Sent servos angles command: {angles_list}')
+            # После выполнения действия перейти к следующей точке
+            self.current_waypoint_index += 1
+            self.execute_next_waypoint()
 
         # Добавь другие типы действий по мере необходимости
 
     def continue_after_pause(self):
-        self.get_logger().info('Pause finished, continuing route...')
-        self.timer.destroy() # Уничтожить таймер после использования
+        timestamp = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
+        self.get_logger().info(f'[{timestamp}] Pause finished, continuing route...')
+        # Уничтожить таймер после использования
+        if hasattr(self, 'timer') and self.timer is not None:
+            self.timer.cancel()
+            self.timer.destroy()
         # Пауза завершена, вызвать выполнение следующей точки
         self.current_waypoint_index += 1
         self.execute_next_waypoint()
