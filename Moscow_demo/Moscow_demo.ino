@@ -9,8 +9,8 @@
 #define ENA_RIGHT 5
 #define ENA_LEFT  4
 
-// Таймаут смерти робота (20 секунд)
-#define ROBOT_LIFETIME_MS 24000
+// Таймаут смерти робота (24 секунды)
+#define ROBOT_LIFETIME_MS 70000
 
 /********************************************************
  *  ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ
@@ -27,6 +27,7 @@ uint32_t waitStartTime = 0;
 uint32_t robotStartTime = 0;       // Время, когда кнопка была отпущена
 bool robotIsDead = false;          // Флаг смерти робота
 int movePhase = 0;                 // 0 = вперёд, 1 = назад
+int phaseCounter = 0;              // Счётчик завершённых циклов вперёд-назад
 
 // Состояние от лидара
 bool lidarDanger = false;
@@ -61,10 +62,9 @@ static const uint8_t LIDAR_HEADER_LEN = 4;
 static const uint8_t LIDAR_BODY_LEN = 32;
 
 // Пороговые расстояния (в миллиметрах) и время залипания аварии
-#define ALARM_DIST 200     // Менее 400 мм -> сектор в красном цвете
-#define WARNING_DIST 350   // Менее 650 мм (но >= 400 мм) -> жёлтый
-#define ALARM_HOLD_MS 300  // Время (мс), которое сектор будет «залипать» в красным
-#define SECTOR_OFFSET 1    // Cдвиг секторов (0..11)
+#define ALARM_DIST 250     // Менее 200 мм -> сектор в красном цвете
+#define ALARM_HOLD_MS 300  // Время (мс), которое сектор будет «залипать» в красном
+#define SECTOR_OFFSET 1    // Сдвиг секторов (0..11)
 
 // Храним текущее измеренное расстояние по каждому из 12 секторов.
 static float sectorDistances[12] = { 0.0f };
@@ -172,7 +172,7 @@ bool parseAndProcessPacket() {
     packetAngles[i] = angle;
   }
 
-  // 5) Создаём в ременный массив, где соберём минимальные расстояния по секторам
+  // 5) Создаём временный массив, где соберём минимальные расстояния по секторам
   float tempSectorMin[12];
   for (int s = 0; s < 12; s++) {
     tempSectorMin[s] = NO_VALUE;  // Изначально никаких данных
@@ -250,13 +250,13 @@ void setup() {
   leftStepper.reverse(1);
 
   rightStepper.setRunMode(FOLLOW_POS);
-  rightStepper.setAcceleration(600);
-  rightStepper.setMaxSpeed(2000);
+  rightStepper.setAcceleration(2000);
+  rightStepper.setMaxSpeed(6000);
   digitalWrite(ENA_RIGHT, LOW); // Включаем моторы
 
   leftStepper.setRunMode(FOLLOW_POS);
-  leftStepper.setAcceleration(600);
-  leftStepper.setMaxSpeed(2000);
+  leftStepper.setAcceleration(2000);
+  leftStepper.setMaxSpeed(6000);
   digitalWrite(ENA_LEFT, LOW);
 
   // Инициализация Serial для лидара
@@ -294,8 +294,8 @@ void loop() {
   if (waitingAfterStart) {
     if (millis() - waitStartTime >= 5000) { // 5 секунд
       waitingAfterStart = false;
-      rightStepper.setTarget(7000);  // Вперёд
-      leftStepper.setTarget(7000);
+      rightStepper.setTarget(3000);  // Вперёд
+      leftStepper.setTarget(3000);
       Serial.println("Moving forward...");
     }
     // Продолжаем парсить лидар, но не смотрим на опасность
@@ -323,20 +323,33 @@ void loop() {
     }
 
     // Проверяем, закончилась ли первая фаза (вперёд)
-    if (movePhase == 0 && rightStepper.getCurrent() >= 1200) { // Вперёд
+    if (movePhase == 0 && rightStepper.getCurrent() >= 1800) { // Вперёд
       movePhase = 1;
-      phase0Complete = true;
       Serial.println("Phase 0 complete. Moving back...");
-      rightStepper.setTarget(-300); // Назад
-      leftStepper.setTarget(-300);
+      rightStepper.setTarget(0); // Назад к начальной позиции
+      leftStepper.setTarget(0);
     }
 
     // Проверяем, закончилась ли вторая фаза (назад)
-    if (movePhase == 1 && rightStepper.getCurrent() <= -300) { // Назад
+    if (movePhase == 1 && rightStepper.getCurrent() <= 0) { // Назад
       phase1Complete = true;
       Serial.println("Phase 1 complete. Movement finished.");
-      movementStarted = false;
-      movePhase = 0;
+      // Увеличиваем счётчик циклов
+      phaseCounter++;
+      // Проверяем, достиг ли счётчик нужного числа циклов (например, 1)
+      if (phaseCounter >= 1) {
+        Serial.println("All cycles completed. Stopping robot.");
+        digitalWrite(ENA_RIGHT, HIGH); // Выключаем моторы
+        digitalWrite(ENA_LEFT, HIGH);
+        robotIsDead = true; // Устанавливаем флаг смерти, чтобы больше не двигался
+        return; // Выходим из loop()
+      } else {
+        // Если цикл ещё не завершён, сбрасываем фазу и начинаем снова
+        movePhase = 0;
+        rightStepper.setTarget(3000);  // Вперёд снова
+        leftStepper.setTarget(3000);
+        Serial.println("Starting next cycle. Moving forward again...");
+      }
     }
   }
 
